@@ -69,6 +69,8 @@ python -m app.main mode status
 
 设置 passcode 后，`import` 和 `remove` 只允许在 edit mode 下执行。view mode 下仍可 `list`、`report`、`archive`。
 
+edit mode 是短时授权：解锁后 5 分钟过期，并且成功执行一次 `import` 或 `remove` 后会自动回到 view mode，避免忘记手动切回导致误操作。
+
 查看操作记录：
 
 ```bash

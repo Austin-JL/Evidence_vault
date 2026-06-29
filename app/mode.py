@@ -4,17 +4,29 @@ import hashlib
 import hmac
 import json
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.config import MODE_PATH, ensure_data_dirs
 
 
+EDIT_MODE_TTL_SECONDS = 300
+
+
 def status() -> dict[str, Any]:
     state = _load_state()
     if state is None:
-        return {"configured": False, "mode": "edit"}
-    return {"configured": True, "mode": state.get("mode", "view")}
+        return {"configured": False, "mode": "edit", "edit_expires_at": None}
+    if state.get("mode") == "edit" and _is_expired(state.get("edit_expires_at")):
+        state["mode"] = "view"
+        state["edit_expires_at"] = None
+        state["updated_at"] = _now()
+        _save_state(state)
+    return {
+        "configured": True,
+        "mode": state.get("mode", "view"),
+        "edit_expires_at": state.get("edit_expires_at"),
+    }
 
 
 def set_passcode(passcode: str) -> None:
@@ -23,6 +35,7 @@ def set_passcode(passcode: str) -> None:
     _save_state(
         {
             "mode": "view",
+            "edit_expires_at": None,
             "salt": salt,
             "passcode_hash": _hash_passcode(passcode, salt),
             "updated_at": _now(),
@@ -35,6 +48,7 @@ def enter_edit_mode(passcode: str) -> None:
     if not _verify_passcode(passcode, state):
         raise ValueError("invalid passcode")
     state["mode"] = "edit"
+    state["edit_expires_at"] = _edit_expires_at()
     state["updated_at"] = _now()
     _save_state(state)
 
@@ -44,8 +58,13 @@ def enter_view_mode() -> None:
     if state is None:
         return
     state["mode"] = "view"
+    state["edit_expires_at"] = None
     state["updated_at"] = _now()
     _save_state(state)
+
+
+def lock_edit_mode() -> None:
+    enter_view_mode()
 
 
 def require_edit_mode() -> None:
@@ -54,6 +73,12 @@ def require_edit_mode() -> None:
         return
     if state.get("mode") != "edit":
         raise ValueError("edit mode is locked; run `mode edit` with your passcode first")
+    if _is_expired(state.get("edit_expires_at")):
+        state["mode"] = "view"
+        state["edit_expires_at"] = None
+        state["updated_at"] = _now()
+        _save_state(state)
+        raise ValueError("edit mode expired; run `mode edit` with your passcode again")
 
 
 def _load_state() -> dict[str, Any] | None:
@@ -89,6 +114,21 @@ def _verify_passcode(passcode: str, state: dict[str, Any]) -> bool:
     expected = state.get("passcode_hash", "")
     actual = _hash_passcode(passcode, state.get("salt", ""))
     return hmac.compare_digest(actual, expected)
+
+
+def _edit_expires_at() -> str:
+    return (datetime.now(timezone.utc).astimezone() + timedelta(seconds=EDIT_MODE_TTL_SECONDS)).isoformat(
+        timespec="seconds"
+    )
+
+
+def _is_expired(value: str | None) -> bool:
+    if not value:
+        return True
+    try:
+        return datetime.now(timezone.utc).astimezone() >= datetime.fromisoformat(value)
+    except ValueError:
+        return True
 
 
 def _now() -> str:

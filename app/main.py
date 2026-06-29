@@ -10,7 +10,7 @@ from app.audit import list_operations, log_operation
 from app import db
 from app.archive import export_monthly_archive
 from app.importer import import_evidence
-from app.mode import enter_edit_mode, enter_view_mode, require_edit_mode, set_passcode, status
+from app.mode import enter_edit_mode, enter_view_mode, lock_edit_mode, require_edit_mode, set_passcode, status
 from app.remover import remove_record
 from app.report import generate_monthly_report
 
@@ -37,6 +37,7 @@ def main(argv: list[str] | None = None) -> int:
                 target_id=result["id"],
                 details=_details(args, result=result),
             )
+            lock_edit_mode()
             return 0
         if args.command == "list":
             rows = db.list_month(args.month)
@@ -96,6 +97,7 @@ def main(argv: list[str] | None = None) -> int:
                 target_id=args.id,
                 details=_details(args, result=result),
             )
+            lock_edit_mode()
             return 0
         if args.command == "mode":
             result = handle_mode(args)
@@ -221,6 +223,8 @@ def handle_mode(args) -> int:
         configured = "yes" if current["configured"] else "no"
         print(f"Mode: {current['mode']}")
         print(f"Passcode configured: {configured}")
+        if current.get("edit_expires_at"):
+            print(f"Edit expires at: {current['edit_expires_at']}")
         return 0
     if args.mode_command == "set-passcode":
         passcode = getpass.getpass("New passcode: ")
@@ -233,7 +237,9 @@ def handle_mode(args) -> int:
     if args.mode_command == "edit":
         passcode = getpass.getpass("Passcode: ")
         enter_edit_mode(passcode)
+        current = status()
         print("Mode: edit")
+        print(f"Edit expires at: {current['edit_expires_at']}")
         return 0
     if args.mode_command == "view":
         enter_view_mode()
