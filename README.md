@@ -1,8 +1,12 @@
 # Evidence Vault
 
-本地优先的打卡证据归档 CLI。它会复制原始照片、提取可用 EXIF、计算 SHA256、写入 JSON metadata 和 SQLite，并按月生成 PDF 与 ZIP 证据包。
+Evidence Vault is a local-first CLI for preserving file-based proof of real-world events.
 
-## 安装
+It copies original files into a managed archive, extracts available metadata, computes SHA256 hashes, records structured metadata in JSON and SQLite, keeps an operation audit log, and can generate date-based reports and ZIP evidence packages.
+
+The current CLI uses `in` and `out` as simple event direction labels. They are intentionally lightweight labels, not a hard product boundary. The project can evolve toward a more general event model with event types, tags, categories, and workflows.
+
+## Install
 
 ```bash
 python -m venv .venv
@@ -10,9 +14,9 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## 使用
+## Basic Usage
 
-导入上班证据：
+Import an event file:
 
 ```bash
 python -m app.main import --file ~/Downloads/IMG_3287.HEIC --direction in --date 2026-06-29
@@ -20,45 +24,43 @@ python -m app.main import --file ~/Downloads/IMG_3287.HEIC --direction in --date
 
 `--date` accepts either `YYYY-MM-DD` or compact `YYYYMMDD`.
 
-导入下班证据：
+Import another event file with a note:
 
 ```bash
-python -m app.main import --file ~/Downloads/IMG_3299.HEIC --direction out --date 2026-06-29 --note "Evening clock-out evidence"
+python -m app.main import --file ~/Downloads/IMG_3299.HEIC --direction out --date 2026-06-29 --note "Supporting event record"
 ```
 
-查看某月记录：
-
-```bash
-python -m app.main list --month 2026-06
-```
-
-查看记录 ID（删除时需要）：
+List records for a month:
 
 ```bash
 python -m app.main list --month 2026-06
 ```
 
-生成月度 PDF：
+Generate a monthly PDF report:
 
 ```bash
 python -m app.main report --month 2026-06
 ```
 
-导出月度 ZIP：
+Export a monthly ZIP package:
 
 ```bash
 python -m app.main archive --month 2026-06
 ```
 
-删除误导入的记录：
+## Safe Removal
+
+Remove an imported record by ID:
 
 ```bash
 python -m app.main remove --id 2
 ```
 
-删除会先显示记录详情，并要求输入 `DELETE` 确认。原始照片和 metadata 不会直接丢弃，而是移动到 `data/trash/`，并写入 `removed_record.json` 审计文件。
+Removal shows the record details and requires typing `DELETE`. Existing original files and metadata are moved to `data/trash/` with a `removed_record.json` audit file instead of being directly discarded.
 
-启用防误操作模式：
+## Edit/View Mode
+
+Configure passcode-gated edit mode:
 
 ```bash
 python -m app.main mode set-passcode
@@ -67,11 +69,13 @@ python -m app.main mode view
 python -m app.main mode status
 ```
 
-设置 passcode 后，`import` 和 `remove` 只允许在 edit mode 下执行。view mode 下仍可 `list`、`report`、`archive`。
+After a passcode is configured, `import` and `remove` are allowed only in edit mode. Read-only commands such as `list`, `report`, `archive`, and `audit` remain available in view mode.
 
-edit mode 是短时授权：解锁后 5 分钟过期，并且成功执行一次 `import` 或 `remove` 后会自动回到 view mode，避免忘记手动切回导致误操作。
+Edit mode is short-lived: it expires after 5 minutes and automatically returns to view mode after one successful `import` or `remove`.
 
-查看操作记录：
+## Operation Log
+
+View the operation log:
 
 ```bash
 python -m app.main audit
@@ -79,15 +83,15 @@ python -m app.main audit --action import
 python -m app.main audit --status failed
 ```
 
-每次 CLI 操作都会写入 `operation_log`，包括 actor、action、status、timestamp、target record 和非敏感参数。默认 actor 是当前系统用户；如果需要记录具体 maker，可以在命令前设置：
+Each CLI operation writes an entry to `operation_log`, including actor, action, status, timestamp, target record, and non-secret details. The default actor is the current system user. To set an explicit actor for a command:
 
 ```bash
 EV_ACTOR="Austin" python -m app.main import --file ~/Downloads/IMG_3287.HEIC --direction in --date 2026-06-29
 ```
 
-## 数据位置
+## Data Location
 
-运行后会生成：
+Runtime data is stored under `data/`:
 
 ```text
 data/
@@ -95,7 +99,22 @@ data/
   metadata/
   reports/
   archives/
+  trash/
   evidence.db
+  mode.json
 ```
 
-同一天同方向的多次导入会自动追加序号，例如 `in_2.HEIC`。相同 SHA256 的文件会被拒绝，避免重复导入。
+The `data/` directory is intentionally ignored by Git because it may contain private files, personal metadata, passcode state, and audit records.
+
+## Integrity Model
+
+Evidence Vault currently provides local integrity controls:
+
+- original files are copied and not modified in place
+- duplicate imports are rejected by SHA256
+- metadata and database records store SHA256 hashes
+- removal is confirmed and moved to trash with an audit file
+- operations are logged in SQLite
+- edit mode reduces accidental modification risk
+
+These controls are useful for personal organization and tamper-evident record keeping, but they are not tamper-proof against the same operating-system user who owns the files. A future stronger model should add external trust anchors such as hash-chain manifests, signed digests, immutable storage, or timestamped commits to a remote repository.
