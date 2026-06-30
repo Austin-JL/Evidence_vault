@@ -50,6 +50,18 @@ Export a monthly ZIP package:
 python -m app.main archive --month 2026-06
 ```
 
+Run a monthly integrity check:
+
+```bash
+python -m app.main integrity-check --month 2026-06
+```
+
+Run monthly housekeeping, which performs integrity checking, report generation, manifest generation, and archive export:
+
+```bash
+python -m app.main housekeep --month 2026-06
+```
+
 ## Safe Removal
 
 Remove an imported record by ID:
@@ -79,7 +91,7 @@ python -m app.main mode view
 python -m app.main mode status
 ```
 
-After a passcode is configured, `import`, `remove`, and `refresh-metadata` are allowed only in edit mode. Read-only commands such as `list`, `report`, `archive`, and `audit` remain available in view mode.
+After a passcode is configured, `import`, `remove`, and `refresh-metadata` are allowed only in edit mode. Read-only commands such as `list`, `integrity-check`, `report`, `archive`, `housekeep`, and `audit` remain available in view mode.
 
 Edit mode is short-lived: it expires after 5 minutes and automatically returns to view mode after one successful `import` or `remove`.
 
@@ -125,6 +137,9 @@ Evidence Vault currently provides local integrity controls:
 - metadata and database records store SHA256 hashes
 - removal is confirmed and moved to trash with an audit file
 - operations are logged in SQLite
+- monthly integrity checks verify original files, metadata sidecars, hashes, and duplicate stored paths
+- monthly archives include a manifest and manifest checksum
+- audit events are appended with hash chaining
 - edit mode reduces accidental modification risk
 
 These controls are useful for personal organization and tamper-evident record keeping, but they are not tamper-proof against the same operating-system user who owns the files. A future stronger model should add external trust anchors such as hash-chain manifests, signed digests, immutable storage, or timestamped commits to a remote repository.

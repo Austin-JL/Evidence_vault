@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import getpass
+import hashlib
 import json
 import os
 import sqlite3
@@ -21,14 +22,34 @@ CREATE TABLE IF NOT EXISTS operation_log (
     status TEXT NOT NULL,
     details_json TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS audit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    record_id TEXT,
+    month TEXT,
+    created_at TEXT NOT NULL,
+    details_json TEXT NOT NULL,
+    previous_hash TEXT NOT NULL,
+    event_hash TEXT NOT NULL
+);
 """
+
+EVENT_TYPES = {
+    "IMPORT",
+    "DELETE",
+    "RESTORE",
+    "INTEGRITY_CHECK",
+    "HOUSEKEEP",
+    "ARCHIVE_CREATED",
+}
 
 
 def connect() -> sqlite3.Connection:
     ensure_data_dirs()
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    conn.execute(SCHEMA)
+    conn.executescript(SCHEMA)
     conn.commit()
     return conn
 
@@ -74,6 +95,49 @@ def log_operation(
         return int(cursor.lastrowid)
 
 
+def append_audit_event(
+    *,
+    event_type: str,
+    record_id: str | int | None = None,
+    month: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> int:
+    event_type = event_type.upper()
+    if event_type not in EVENT_TYPES:
+        raise ValueError(f"unsupported audit event type: {event_type}")
+
+    created_at = _now()
+    details_json = json.dumps(details or {}, ensure_ascii=False, sort_keys=True)
+    with connect() as conn:
+        previous_hash = _last_event_hash(conn)
+        event_hash = _event_hash(previous_hash, created_at, event_type, details_json)
+        cursor = conn.execute(
+            """
+            INSERT INTO audit_events (
+                event_type,
+                record_id,
+                month,
+                created_at,
+                details_json,
+                previous_hash,
+                event_hash
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_type,
+                str(record_id) if record_id is not None else None,
+                month,
+                created_at,
+                details_json,
+                previous_hash,
+                event_hash,
+            ),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+
+
 def list_operations(
     *,
     limit: int = 50,
@@ -104,6 +168,53 @@ def list_operations(
                 values,
             )
         )
+
+
+def list_audit_events(
+    *,
+    limit: int | None = 50,
+    month: str | None = None,
+) -> list[sqlite3.Row]:
+    clauses = []
+    values: list[Any] = []
+    if month:
+        clauses.append("month = ?")
+        values.append(month)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    limit_clause = ""
+    if limit is not None:
+        limit_clause = "LIMIT ?"
+        values.append(limit)
+    with connect() as conn:
+        return list(
+            conn.execute(
+                f"""
+                SELECT *
+                FROM audit_events
+                {where}
+                ORDER BY id DESC
+                {limit_clause}
+                """,
+                values,
+            )
+        )
+
+
+def count_audit_events(month: str | None = None) -> int:
+    clause = "WHERE month = ?" if month else ""
+    values = (month,) if month else ()
+    with connect() as conn:
+        return int(conn.execute(f"SELECT COUNT(*) FROM audit_events {clause}", values).fetchone()[0])
+
+
+def _last_event_hash(conn: sqlite3.Connection) -> str:
+    row = conn.execute("SELECT event_hash FROM audit_events ORDER BY id DESC LIMIT 1").fetchone()
+    return row["event_hash"] if row else ""
+
+
+def _event_hash(previous_hash: str, created_at: str, event_type: str, details_json: str) -> str:
+    payload = f"{previous_hash}{created_at}{event_type}{details_json}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _now() -> str:

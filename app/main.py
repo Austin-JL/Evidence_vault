@@ -4,12 +4,15 @@ import argparse
 import getpass
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
-from app.audit import list_operations, log_operation
+from app.audit import append_audit_event, list_operations, log_operation
 from app import db
 from app.archive import export_monthly_archive
+from app.housekeeping import housekeep_month
 from app.importer import import_evidence
+from app.integrity import check_month
 from app.mode import enter_edit_mode, enter_view_mode, lock_edit_mode, require_edit_mode, set_passcode, status
 from app.refresher import refresh_record_metadata
 from app.remover import remove_record
@@ -23,6 +26,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "import":
             require_edit_mode()
+            precheck = check_month(_current_month())
+            append_audit_event(
+                event_type="INTEGRITY_CHECK",
+                month=precheck["month"],
+                details={"trigger": "pre_import", **_integrity_summary(precheck)},
+            )
+            if precheck["failed"]:
+                raise ValueError("current month integrity check failed; import aborted")
             result = import_evidence(
                 Path(args.file),
                 args.direction,
@@ -37,6 +48,12 @@ def main(argv: list[str] | None = None) -> int:
                 target_type="record",
                 target_id=result["id"],
                 details=_details(args, result=result),
+            )
+            append_audit_event(
+                event_type="IMPORT",
+                record_id=result["id"],
+                month=result["record_date"][:7],
+                details={"stored_path": result["stored_path"], "sha256": result["sha256"]},
             )
             lock_edit_mode()
             return 0
@@ -66,7 +83,46 @@ def main(argv: list[str] | None = None) -> int:
                 status="success",
                 details=_details(args, output_path=str(path)),
             )
+            append_audit_event(
+                event_type="ARCHIVE_CREATED",
+                month=args.month,
+                details={"output_path": str(path)},
+            )
             return 0
+        if args.command == "integrity-check":
+            result = check_month(args.month)
+            print_integrity_result(result)
+            log_operation(
+                action="integrity-check",
+                status="success" if result["failed"] == 0 else "failed",
+                details=_details(args, result=_integrity_summary(result)),
+            )
+            append_audit_event(
+                event_type="INTEGRITY_CHECK",
+                month=args.month,
+                details={"trigger": "manual", **_integrity_summary(result)},
+            )
+            return 0 if result["failed"] == 0 else 1
+        if args.command == "housekeep":
+            result = housekeep_month(args.month)
+            print_housekeep_result(result)
+            log_operation(
+                action="housekeep",
+                status="success" if result["status"] == "COMPLETE" else "failed",
+                details=_details(args, result=result),
+            )
+            append_audit_event(
+                event_type="HOUSEKEEP",
+                month=args.month,
+                details=result,
+            )
+            if result["archive_path"]:
+                append_audit_event(
+                    event_type="ARCHIVE_CREATED",
+                    month=args.month,
+                    details={"output_path": result["archive_path"], "trigger": "housekeep"},
+                )
+            return 0 if result["status"] == "COMPLETE" else 1
         if args.command == "remove":
             row = db.get_record(args.id)
             if row is None:
@@ -97,6 +153,12 @@ def main(argv: list[str] | None = None) -> int:
                 target_type="record",
                 target_id=args.id,
                 details=_details(args, result=result),
+            )
+            append_audit_event(
+                event_type="DELETE",
+                record_id=args.id,
+                month=row["record_date"][:7],
+                details=result,
             )
             lock_edit_mode()
             return 0
@@ -168,6 +230,12 @@ def build_parser() -> argparse.ArgumentParser:
     archive_parser = subparsers.add_parser("archive", help="Export monthly ZIP evidence package")
     archive_parser.add_argument("--month", required=True, help="Month in YYYY-MM format")
 
+    integrity_parser = subparsers.add_parser("integrity-check", help="Verify monthly vault integrity")
+    integrity_parser.add_argument("--month", required=True, help="Month in YYYY-MM format")
+
+    housekeep_parser = subparsers.add_parser("housekeep", help="Run monthly integrity, report, manifest, and archive")
+    housekeep_parser.add_argument("--month", required=True, help="Month in YYYY-MM format")
+
     remove_parser = subparsers.add_parser("remove", help="Remove one active evidence record")
     remove_parser.add_argument("--id", type=int, required=True, help="Record ID to remove")
     remove_parser.add_argument("--yes", action="store_true", help="Skip interactive DELETE confirmation")
@@ -221,6 +289,53 @@ def print_record_detail(row) -> None:
     print(f"Media: {_media_label(row['mime_type'])}")
     print(f"Original: {row['stored_path']}")
     print(f"Metadata: {row['metadata_path']}")
+
+
+def print_integrity_result(result: dict) -> None:
+    print("Integrity Check")
+    print()
+    print("Month:")
+    print(result["month"])
+    print()
+    print("Records:")
+    print(result["records"])
+    print()
+    print("Passed:")
+    print(result["passed"])
+    print()
+    print("Failed:")
+    print(result["failed"])
+    if result["issues"]:
+        print()
+        print("Issues:")
+        for issue in result["issues"]:
+            path = f" path={issue['path']}" if issue.get("path") else ""
+            print(f"{issue['severity']} record={issue['record_id']} {issue['message']}{path}")
+    print()
+    print("Vault Status:")
+    print(result["status"])
+
+
+def print_housekeep_result(result: dict) -> None:
+    print("Housekeeping")
+    print()
+    print("Month:")
+    print(result["month"])
+    print()
+    print("Status:")
+    print(result["status"])
+    print()
+    print("Vault Status:")
+    print(result["integrity"]["status"])
+    if result["status"] != "COMPLETE":
+        print()
+        print("Aborted before report/archive generation.")
+        return
+    print()
+    print(f"Report: {result['report_path']}")
+    print(f"Archive: {result['archive_path']}")
+    print(f"Manifest: {result['manifest_path']}")
+    print(f"Manifest SHA256: {result['manifest_sha256_path']}")
 
 
 def print_operations(rows) -> None:
@@ -288,10 +403,24 @@ def _details(args, **extra) -> dict:
 
 def _operation_summary(details: dict) -> str:
     parts = []
-    for key in ("month", "file", "direction", "date", "id", "row_count", "output_path", "error"):
+    for key in ("month", "file", "direction", "date", "id", "row_count", "output_path", "archive_path", "error"):
         if key in details:
             parts.append(f"{key}={details[key]}")
     return " ".join(parts)
+
+
+def _integrity_summary(result: dict) -> dict:
+    return {
+        "month": result["month"],
+        "records": result["records"],
+        "passed": result["passed"],
+        "failed": result["failed"],
+        "status": result["status"],
+    }
+
+
+def _current_month() -> str:
+    return datetime.now(timezone.utc).astimezone().strftime("%Y-%m")
 
 
 def _format_gps(lat: float | None, lng: float | None) -> str:

@@ -45,6 +45,8 @@ def _generate_pdf_with_reportlab(month: str, rows: list, output: Path) -> None:
 
 
 def _row_paragraphs(row, styles) -> list:
+    from reportlab.platypus import Paragraph, Spacer
+
     gps = "N/A"
     if row["gps_lat"] is not None and row["gps_lng"] is not None:
         gps = f"{row['gps_lat']:.6f}, {row['gps_lng']:.6f}"
