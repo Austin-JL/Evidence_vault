@@ -104,6 +104,27 @@ def delete_record(record_id: int) -> bool:
         return cursor.rowcount > 0
 
 
+def update_record_metadata(record_id: int, values: dict[str, Any]) -> bool:
+    columns = (
+        "captured_at",
+        "gps_lat",
+        "gps_lng",
+        "device_model",
+        "file_size",
+        "mime_type",
+    )
+    assignments = ", ".join(f"{column} = ?" for column in columns)
+    params = [values.get(column) for column in columns]
+    params.append(record_id)
+    with connect() as conn:
+        cursor = conn.execute(
+            f"UPDATE evidence_records SET {assignments} WHERE id = ?",
+            params,
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
 def list_month(month: str) -> list[sqlite3.Row]:
     with connect() as conn:
         return list(

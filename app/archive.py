@@ -49,5 +49,12 @@ def _manifest_record(row) -> dict:
         "gps": {"lat": row["gps_lat"], "lng": row["gps_lng"]},
         "file_size": row["file_size"],
         "mime_type": row["mime_type"],
+        "media_type": _media_type(row["mime_type"]),
         "note": row["note"],
     }
+
+
+def _media_type(mime_type: str | None) -> str:
+    if not mime_type or "/" not in mime_type:
+        return "unknown"
+    return mime_type.split("/", 1)[0]

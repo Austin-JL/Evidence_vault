@@ -1,8 +1,8 @@
 # Evidence Vault
 
-Evidence Vault is a local-first CLI for preserving file-based proof of real-world events.
+Evidence Vault is a local-first CLI for preserving photo and video proof of real-world events.
 
-It copies original files into a managed archive, extracts available metadata, computes SHA256 hashes, records structured metadata in JSON and SQLite, keeps an operation audit log, and can generate date-based reports and ZIP evidence packages.
+It copies original media files into a managed archive, extracts available metadata, computes SHA256 hashes, records structured metadata in JSON and SQLite, keeps an operation audit log, and can generate date-based reports and ZIP evidence packages.
 
 The current CLI uses `in` and `out` as simple event direction labels. They are intentionally lightweight labels, not a hard product boundary. The project can evolve toward a more general event model with event types, tags, categories, and workflows.
 
@@ -23,6 +23,8 @@ python -m app.main import --file ~/Downloads/IMG_3287.HEIC --direction in --date
 ```
 
 `--date` accepts either `YYYY-MM-DD` or compact `YYYYMMDD`.
+
+Photos use EXIF metadata when available. Videos such as `.MOV` and `.MP4` use `ffprobe` when it is installed to read capture time, device tags, duration, and resolution. If no capture date is found, pass `--date` explicitly.
 
 Import another event file with a note:
 
@@ -58,6 +60,14 @@ python -m app.main remove --id 2
 
 Removal shows the record details and requires typing `DELETE`. Existing original files and metadata are moved to `data/trash/` with a `removed_record.json` audit file instead of being directly discarded.
 
+Refresh metadata for an existing record after extractor improvements:
+
+```bash
+python -m app.main refresh-metadata --id 7
+```
+
+Refresh verifies that the stored original still matches the recorded SHA256 before updating the database fields and JSON sidecar.
+
 ## Edit/View Mode
 
 Configure passcode-gated edit mode:
@@ -69,7 +79,7 @@ python -m app.main mode view
 python -m app.main mode status
 ```
 
-After a passcode is configured, `import` and `remove` are allowed only in edit mode. Read-only commands such as `list`, `report`, `archive`, and `audit` remain available in view mode.
+After a passcode is configured, `import`, `remove`, and `refresh-metadata` are allowed only in edit mode. Read-only commands such as `list`, `report`, `archive`, and `audit` remain available in view mode.
 
 Edit mode is short-lived: it expires after 5 minutes and automatically returns to view mode after one successful `import` or `remove`.
 

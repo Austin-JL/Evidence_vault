@@ -54,6 +54,7 @@ def _row_paragraphs(row, styles) -> list:
         Paragraph(f"Captured At: {captured}", styles["Normal"]),
         Paragraph(f"GPS: {gps}", styles["Normal"]),
         Paragraph(f"SHA256: {row['sha256']}", styles["Normal"]),
+        Paragraph(f"Media: {_media_label(row['mime_type'])}", styles["Normal"]),
         Paragraph(f"File: {Path(row['stored_path']).name}", styles["Normal"]),
         Spacer(1, 8),
     ]
@@ -80,6 +81,7 @@ def _generate_plain_pdf(month: str, rows: list, output: Path) -> None:
                     f"Captured At: {_time_only(row['captured_at'])}",
                     f"GPS: {gps}",
                     f"SHA256: {row['sha256']}",
+                    f"Media: {_media_label(row['mime_type'])}",
                     f"File: {Path(row['stored_path']).name}",
                     "",
                 ]
@@ -131,6 +133,12 @@ def _time_only(value: str | None) -> str:
         return datetime.fromisoformat(value).time().isoformat(timespec="seconds")
     except ValueError:
         return value
+
+
+def _media_label(mime_type: str | None) -> str:
+    if not mime_type or "/" not in mime_type:
+        return "file"
+    return mime_type.split("/", 1)[0]
 
 
 def _now() -> str:

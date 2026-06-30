@@ -11,6 +11,7 @@ from app import db
 from app.archive import export_monthly_archive
 from app.importer import import_evidence
 from app.mode import enter_edit_mode, enter_view_mode, lock_edit_mode, require_edit_mode, set_passcode, status
+from app.refresher import refresh_record_metadata
 from app.remover import remove_record
 from app.report import generate_monthly_report
 
@@ -99,6 +100,22 @@ def main(argv: list[str] | None = None) -> int:
             )
             lock_edit_mode()
             return 0
+        if args.command == "refresh-metadata":
+            result = refresh_record_metadata(args.id)
+            print(f"Refreshed metadata for record #{result['id']}")
+            print(f"Captured: {result['captured_at'] or 'N/A'}")
+            print(f"GPS: {_format_gps(result['gps_lat'], result['gps_lng'])}")
+            print(f"Media: {_media_label(result['mime_type'])}")
+            print(f"Metadata: {result['metadata_path']}")
+            log_operation(
+                action="refresh-metadata",
+                status="success",
+                target_type="record",
+                target_id=args.id,
+                details=_details(args, result=result),
+            )
+            lock_edit_mode()
+            return 0
         if args.command == "mode":
             result = handle_mode(args)
             log_operation(
@@ -136,8 +153,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="evidence-vault")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    import_parser = subparsers.add_parser("import", help="Import one evidence photo")
-    import_parser.add_argument("--file", required=True, help="Photo or Live Photo still image path")
+    import_parser = subparsers.add_parser("import", help="Import one evidence media file")
+    import_parser.add_argument("--file", required=True, help="Photo, video, or Live Photo still image path")
     import_parser.add_argument("--direction", choices=("in", "out"), required=True)
     import_parser.add_argument("--date", help="Record date in YYYY-MM-DD or YYYYMMDD format")
     import_parser.add_argument("--note", help="Optional note stored in metadata and SQLite")
@@ -154,6 +171,9 @@ def build_parser() -> argparse.ArgumentParser:
     remove_parser = subparsers.add_parser("remove", help="Remove one active evidence record")
     remove_parser.add_argument("--id", type=int, required=True, help="Record ID to remove")
     remove_parser.add_argument("--yes", action="store_true", help="Skip interactive DELETE confirmation")
+
+    refresh_parser = subparsers.add_parser("refresh-metadata", help="Re-extract metadata for one record")
+    refresh_parser.add_argument("--id", type=int, required=True, help="Record ID to refresh")
 
     mode_parser = subparsers.add_parser("mode", help="Show or change edit/view mode")
     mode_subparsers = mode_parser.add_subparsers(dest="mode_command", required=True)
@@ -183,6 +203,7 @@ def print_records(rows) -> None:
             f"{row['captured_at'] or 'N/A'} "
             f"{gps} "
             f"{row['sha256'][:12]}... "
+            f"{_media_label(row['mime_type'])} "
             f"{row['stored_path']}"
         )
 
@@ -197,6 +218,7 @@ def print_record_detail(row) -> None:
     print(f"Captured: {row['captured_at'] or 'N/A'}")
     print(f"GPS: {gps}")
     print(f"SHA256: {row['sha256']}")
+    print(f"Media: {_media_label(row['mime_type'])}")
     print(f"Original: {row['stored_path']}")
     print(f"Metadata: {row['metadata_path']}")
 
@@ -270,6 +292,18 @@ def _operation_summary(details: dict) -> str:
         if key in details:
             parts.append(f"{key}={details[key]}")
     return " ".join(parts)
+
+
+def _format_gps(lat: float | None, lng: float | None) -> str:
+    if lat is None or lng is None:
+        return "N/A"
+    return f"{lat:.6f}, {lng:.6f}"
+
+
+def _media_label(mime_type: str | None) -> str:
+    if not mime_type or "/" not in mime_type:
+        return "file"
+    return mime_type.split("/", 1)[0]
 
 
 if __name__ == "__main__":
